@@ -1,4 +1,4 @@
-# wbc_analysis
+# Wbc Analysis
 
 In the pursuit of developing a robust methodology for cancer detection, our focus is on leveraging unsupervised learning techniques to analyze a comprehensive set of health indicators. The ***wbc*** dataset that will be used for this analysis consists of unlabeled health indicators, accompanied by a binary outcome variable denoting the presence (1) or absence (0) of cancer.
 

@@ -1,0 +1,516 @@
+---
+title: "HW2 WBC_TM"
+author: "Tushar Mittal"
+date: "2023-11-23"
+output:
+  html_document:
+    highlight: tango
+    theme: bootstrap
+    toc: yes
+    toc_float: True
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+knitr::opts_chunk$set(warning = FALSE)
+knitr::opts_chunk$set(message = FALSE)
+setwd ("C:/Users/atush/OneDrive/Desktop/Fall B 2023/MBAN 556/HW2")
+```
+
+# Introduction
+
+In the pursuit of developing a robust methodology for cancer detection, our focus is on leveraging unsupervised learning techniques to analyze a comprehensive set of health indicators. The ***wbc*** dataset that will be used for this analysis consists of unlabeled health indicators, accompanied by a binary outcome variable denoting the presence (1) or absence (0) of cancer.\
+
+To gauge the efficacy of our cancer detection strategy, we will employ a confusion matrix, with a specific emphasis on the Sensitivity parameter. Our primary concern is mitigating False Negatives, instances where our analysis erroneously suggests no cancer when, in reality, cancer is present. False Positives, indicating a cancer diagnosis when none is present, are not significant for our analysis. \
+
+Our methodology encompasses a spectrum of techniques covered in our coursework, including Principal Components for dimensionality reduction, clustering methods, and outlier detection strategies. By integrating these tools, we aim to craft a nuanced and effective approach to cancer detection that aligns with the principles of unsupervised learning. \
+
+The specific problem we are trying to solve is how to identify whether someone has cancer based on a  bunch of health related data about that person.
+
+# Loading Libraries
+Let's start by importing the required libraries for our analysis.
+```{r}
+library(ggplot2)
+library(plotly)
+library(knitr)
+library(caret)
+library(dplyr)
+library(cluster)
+library(dendextend)
+library(ggdendro)
+library(factoextra)
+library(fpc)
+library(dbscan)
+library(outliers)
+library(solitude)
+```
+
+# Importing and Cleaning Data
+
+Next, we will import the data and clean it for our use.
+```{r}
+wbc <- read.csv("wbc.csv")
+colSums(is.na(wbc))
+summary(wbc)
+```
+
+**We can see that the data is already scaled and there are no NA values.** Let's drop the outcome variable ("y") as we will not need it for our initial analysis. We will add it back later when gauging the efficacy of our chosen model.
+
+```{r}
+wbc_data <- wbc[-ncol(wbc)]
+str(wbc_data) #checking
+```
+# Primary Component Analysis (PCA)
+
+To prepare our dataset for analysis and interpretation, we need to center it to the mean. We will also perform a PCA and select the number of principal components that explain about **90% of the total variance** in the data. This will allow us to reduce the dimensionality and complexity of the data while retaining most of the information.
+
+```{r}
+wbc.pca <- prcomp(wbc_data, center = TRUE, scale. = FALSE) #data is already scaled, but not centered
+summary(wbc.pca)
+```
+Here, we see that **7 PCs** effectively explain about 90.88% of the cumulative variance in our dataset, which is above our required threshold of 90%. Let's create a new df with just these 7 PCs.
+
+```{r}
+wbc.pca_main <- as.data.frame(wbc.pca$x[,1:7])
+summary(wbc.pca_main)
+```
+
+Great! Now we have our main dataset that explains about over 90% of the variance in our raw data and is also scaled and mean-centered.\
+
+**Next, we will perform different clustering and outlier analysis to determine the best approach to analyze our data.**
+
+# K-Means Clustering
+
+Let's start by finding optimal number of clusters for k-means clustering.
+
+## Finding Optimal "K" 
+
+```{r}
+fviz_nbclust(wbc.pca_main, kmeans, method = "wss")
+## WSS value must be lower, lower is better, however, if there are more clusters, the cost of communication is more.
+
+fviz_nbclust(wbc.pca_main, kmeans, method = "gap_stat")
+## for gap statistic, the gap statistic must keep on going up and as soon as it elbows, i.e., it goes down, that number of clusters is best in this case.
+
+fviz_nbclust(wbc.pca_main, kmeans, method = "silhouette")
+## maximum silhouette is better
+```
+
+Through all the 3 methods, we can see that 1 and 2 are the possible ideal number of clusters for our dataset, if k-means clustering is applied. In the WSS method, we see a notable change in the rate of decrease of WSS at 1 cluster, 2 clusters and, again at 6 cluster size. Similarly, the "Gap Statistic" method  indicates a good balance between the within-cluster variation and a random expectation at 1 cluster size. In addition, the "Silhouette Score" method ensures how well-separated the clusters are and is highest at 2 clusters.\
+
+## K-Means Cluster Visualizations
+
+**Given the variations in optimal cluster suggestions arising from methods such as wss, gap_stat, and silhouette, coupled with the unknown characteristics of the variables, we will conduct iterative modeling for both 1 and 2 k-means clustering. This approach aims to discern the most suitable number of clusters, acknowledging the intricacies introduced by different evaluation metrics and the inherent nature of our variables.**
+
+### 1 Cluster - K-Means
+```{r}
+set.seed(13579)
+km1 <- kmeans(wbc.pca_main, 1)
+
+fviz_cluster(km1, data = wbc.pca_main)
+```
+
+### 2 Clusters - K-Means
+```{r}
+set.seed(13579)
+km2 <- kmeans(wbc.pca_main, 2)
+
+fviz_cluster(km2, data = wbc.pca_main)
+```
+
+Analyzing the above visuals, we can say that using **1 cluster** seems like the optimal choice due to the close proximity of this data. Let's create a new df and add the cluster column from our k-means cluster analysis to this new df.
+
+```{r}
+wbc_km <- wbc.pca_main
+wbc_km$cluster <- km1$cluster
+```
+
+## Outlier Analysis in K-means clustering
+
+In k-means clustering with just 1 cluster, distance based approach would work best to find the outliers. We will first find the **Euclidean distance** for each data point in our dataset, and then set a threshold beyond which a point will be considered as an outlier.
+
+```{r}
+centers <- aggregate(. ~ cluster, data = wbc_km, FUN = mean)
+
+# Calculate distances
+distances <- apply(wbc_km[, -which(colnames(wbc_km) %in% c("cluster"))], 1, function(x) sqrt(sum((x - centers)^2)))
+
+threshold <- (max(distances) + min(distances)) / 2
+ # threshold set to average of maximum and minimum distances as recommended in class readings
+
+wbc_km$outlier <- ifelse(distances > threshold, "Yes", "No")
+
+wbc_km_outliers <- kable(table(wbc_km$outlier), caption = "K-Means Analysis - Outliers Count", col.names = c("", ""))
+wbc_km_outliers
+```
+
+According to our k-means model, these 12 outliers are the patients that have cancer.
+
+## Confusion Matrix and Sensitivity Analysis | K-Means Clustering Analysis
+
+Let's build a confusion matrix to test the sensitivity of our k-means model and distance-based outlier analysis. We will also add back the outcome variable(y) to our dedicated dataframe for sensitivity analysis.
+
+```{r}
+wbc_km$y <- wbc$y
+
+pred_km <- ifelse(wbc_km$outlier == "Yes", "Cancer", "No Cancer")
+actual_km <- ifelse(wbc_km$y == 1, "Cancer", "No Cancer")
+
+cfmatrix_km <- confusionMatrix(data = factor(pred_km), reference = factor(actual_km))
+cfmatrix_km
+```
+
+We can see in the above analysis that **our K-Means model has a sensitivity of `r round(cfmatrix_km$byClass["Sensitivity"], 3)` and an accuracy of `r round(cfmatrix_km$overall["Accuracy"], 3)`.**\
+
+While our k-means model exhibits high accuracy, its sensitivity is notably low at 0.4762. This implies that the model can only identify approximately 47.62% of high-risk patients who may genuinely have cancer. Consequently, the k-means approach appears suboptimal for this dataset, as it falls short in effectively capturing a significant portion of potential cancer cases.\
+
+***Let's try a different clustering model.***
+
+# Density-Based Spatial Clustering
+
+For our DBSCAN clustering and analysis, we don't need to find the optimal cluster size, but rather need to find an optimal eps value. The eps parameter defines the radius within which the algorithm identifies neighboring points for a core point. Finding the right eps value is therefore crucial for our analysis. 
+
+## Optimal EPS value
+
+```{r}
+dbscan::kNNdistplot(wbc.pca_main, k =  5)
+abline(h = 0.36, lty = 2.5)
+```
+
+We can see that an eps value of **0.36** effectively corresponds to a sharp change along the k-distance curve. We will use this "knee" value as our eps for DBSCAN clustering.
+
+## DBSCAN Clustering and Visualization
+
+Let's build our DBSCAN Clusters based on the above optimal eps value and visualize it.
+
+```{r}
+wbc_db <- fpc::dbscan(wbc.pca_main, eps = 0.36, MinPts = 5)
+
+wbc_db_plot <- fviz_cluster(wbc_db, data = wbc.pca_main, stand = FALSE,
+                  ellipse = FALSE, show.clust.cent = FALSE,
+                  geom = "point",palette = "jco", ggtheme = theme_classic())
+wbc_db_plot
+```
+
+Next, we will examine the distribution of the data points across the clusters and the size of each cluster.
+
+```{r}
+wbc_db_table <- kable(table(wbc_db$cluster), caption = "Table of Cluster Counts", col.names = c("Cluster", "Count"))
+wbc_db_table
+```
+
+We can see that our data has 1 cluster with 332 values. There are 46 values that were not assigned to the cluster, and hence, were assigned to the cluster "0". In other words, these values in cluster 0 are outliers. \
+**In our analysis, we can say that these 46 patients are the ones that are predicted by our model to have cancer.**
+
+## Confusion Matrix and Sensitivity Analysis | DBSCAN Analysis
+
+Next, we'll establish a dedicated dataframe for the analysis of the DBScan model, derived from our primary dataset. This new dataframe will incorporate the clusters generated in the previous steps. We will also add back the outcome variable(y) to our dedicated dataframe for sensitivity analysis.
+
+```{r}
+wbc_dbscan <- wbc.pca_main
+wbc_dbscan$cluster <- wbc_db$cluster
+wbc_dbscan$y <- wbc$y
+```
+
+Now, let's build a confusion matrix to test the accuracy and sensitivity of our model.\
+
+```{r}
+pred_db <- ifelse(wbc_dbscan$cluster == 1, "No Cancer", "Cancer")
+actual_db <- ifelse(wbc_dbscan$y == 1, "Cancer", "No Cancer")
+
+cfmatrix_db <- confusionMatrix(data = factor(pred_db), reference = factor(actual_db))
+cfmatrix_db
+```
+
+We can see in the above analysis that **our DBSCAN model has a sensitivity of `r round(cfmatrix_db$byClass["Sensitivity"], 3)` and an accuracy of `r round(cfmatrix_db$overall["Accuracy"], 3)`.**\
+
+While the accuracy of the DBSCAN model is commendable at 90.21%, its sensitivity is noteworthy at 71.43%. This indicates that the model successfully identifies approximately 71.43% of actual cancer cases, making it a more effective choice for detecting high-risk patients compared to the k-means model.\
+
+***Let's try hierarchical clustering model to see if we can get an improved sensitivity.***
+
+# Hierarchical Clustering
+
+Similar to DBSCAN method, hierarchical clustering also doesn't require us to specify the number of clusters to be generated. Additionally, we can get cluster visualizations as dendograms. Hierarchical clustering can be divided into two main types: Agglomerative and Divisive.
+
+## Agglomerative Hierarchical Clustering
+
+First we will look at the **Agglomerative Coefficients (AC)** for different methods and choose the method that gives us the best coefficient. Agglomerative Coefficients is a measure of how well the clustering structure has been preserved. A higher AC indicates that the clusters are more compact and well-separated.A lower AC suggests that the clusters are less compact and possibly overlap.
+
+```{r}
+agnes(wbc.pca_main, method = "average")$ac
+agnes(wbc.pca_main, method = "complete")$ac
+agnes(wbc.pca_main, method = "single")$ac
+agnes(wbc.pca_main, method = "ward")$ac
+```
+
+We see that **Ward** method has the highest Agglomerative Coefficient. Hence, we will be using the ward method for our analysis moving further.
+
+```{r}
+hc_agnes <- agnes(wbc.pca_main, method = "ward")
+pltree(hc_agnes, cex = 0.8, hang = -1, main = "Dendrogram of Agnes")
+```
+
+## Divisive Hierarchical Clustering
+
+```{r}
+hc_diana <- diana(wbc.pca_main)
+hc_diana$dc
+pltree(hc_diana, cex = 0.8, hang = -1, main = "Dendrogram of Diana")
+```
+
+## Optimal Number of Clusters - Hierarchical Clustering
+
+While the hierarchical clustering method doesn't require a predetermined number of clusters, determining the optimal number of clusters for cutting the dendrogram is beneficial for refining the clusterization process. Similar to the techniques employed for optimal clusters in k-means, we can apply the same methods, such as assessing the dendrogram's structure and using metrics like the elbow method or silhouette analysis, to identify the most suitable number of clusters for hierarchical clustering. This step enhances the interpretability and effectiveness of the clustering results.
+
+```{r}
+fviz_nbclust(wbc.pca_main, hcut, method = "wss")
+fviz_nbclust(wbc.pca_main, hcut, method = "gap_stat")
+fviz_nbclust(wbc.pca_main, hcut, method = "silhouette")
+```
+
+Similar to our visualizations in k-means analysis, 1 or 2 cluster size seem to be the possible number of optimal clusters. Let's visualize the clusters and then decide which one seems more suitable for our analysis.
+
+### 1 Cluster - Hierarchical
+
+```{r}
+# Cut tree into 1 group - Agnes
+hc_clusters1 <- cutree(hc_agnes, k = 1)
+
+fviz_cluster(list(data = wbc.pca_main, cluster = hc_clusters1, repel = TRUE))
+fviz_dend(hc_agnes, k=1, main = "Agnes Clustering with 1 Cluster")
+```
+
+```{r}
+# Cut tree into 1 group - Diana
+hc_clusters2 <- cutree(hc_diana, k = 1)
+
+fviz_cluster(list(data = wbc.pca_main, cluster = hc_clusters2, repel = TRUE))
+fviz_dend(hc_diana, k=1, main = "Diana Clustering with 1 Cluster")
+```
+
+### 2 Clusters - Hierarchical
+
+```{r}
+# Cut tree into 2 groups
+hc_clusters3 <- cutree(hc_agnes, k = 2)
+
+fviz_cluster(list(data = wbc.pca_main, cluster = hc_clusters3, repel = TRUE))
+fviz_dend(hc_agnes, k=2, rect = TRUE, main = "Agnes Clustering with 2 Clusters")
+```
+
+```{r}
+# Cut tree into 2 groups
+hc_clusters4 <- cutree(hc_diana, k = 2)
+
+fviz_cluster(list(data = wbc.pca_main, cluster = hc_clusters4, repel = TRUE))
+fviz_dend(hc_diana, k=2, rect = TRUE, main = "Diana Clustering with 2 Clusters")
+```
+
+As we see in the denodgram diagrams of both Agglomerative and Divisive Clustering, it seems **2 clusters** is optimal for hierarchical cluster for our purposes to find outliers and identify patients at high-risk.
+
+## Outlier Analysis in Hierarchical Clustering
+
+**If a particular cluster is visibly separate and has a large height in the dendrogram, it suggests that the items in that cluster are quite dissimilar to items in other clusters. Hence, we can classify the right-most cluster (cluster 2) in both of our dendograms with 2 clusters as outliers.**\
+
+Let's take a look at the distribution of the clusters in both agnes and diana dendograms.
+
+```{r}
+hc_clusters3_table <- kable(table(hc_clusters3), caption = "Table of Agnes Cluster Counts", col.names = c("Cluster", "Count"))
+hc_clusters4_table <- kable(table(hc_clusters4), caption = "Table of Diana Cluster Counts", col.names = c("Cluster", "Count"))
+
+hc_clusters3_table
+hc_clusters4_table
+```
+
+Hence, according to our hierarchical clustering analysis, these 35 patients in cluster 2 of Agnes model and the 16 patients of Diana model can be classified as outliers or high-risk patients with possible cancer.
+
+Next, we will build a dedicated dataframe for hierarchical clustering, and add the Agnes and Diana Clusters as well as the output variable from our raw dataset to test the sensitivity through confusion matrix.
+
+```{r}
+wbc_hc <- wbc.pca_main
+wbc_hc$agnes_cluster <- hc_clusters3
+wbc_hc$diana_cluster <- hc_clusters4
+wbc_hc$y <- wbc$y
+str(wbc_hc)
+```
+
+## Confusion Matrix and Sensitivity Analysis | Hierarchical Clustering
+
+```{r}
+pred_hc_agnes <- ifelse(wbc_hc$agnes_cluster == 1, "No Cancer", "Cancer")
+pred_hc_diana <- ifelse(wbc_hc$diana_cluster == 1, "No Cancer", "Cancer")
+actual_hc <- ifelse(wbc_hc$y == 1, "Cancer", "No Cancer")
+```
+
+
+### Confusion Matrix for Agglomerative Hierarchical Clustering
+
+```{r}
+cfmatrix_hc_agnes <- confusionMatrix(data = factor(pred_hc_agnes), reference = factor(actual_hc))
+cfmatrix_hc_agnes
+```
+
+### Confusion Matrix for Divisive Hierarchical Clustering
+
+```{r}
+cfmatrix_hc_diana <- confusionMatrix(data = factor(pred_hc_diana), reference = factor(actual_hc))
+cfmatrix_hc_diana
+```
+
+We can see in the above analysis that **our Agnes model has a sensitivity of `r round(cfmatrix_hc_agnes$byClass["Sensitivity"], 3)` and an accuracy of `r round(cfmatrix_hc_agnes$overall["Accuracy"], 3)`** where as **our Diana model has a sensitivity of `r round(cfmatrix_hc_diana$byClass["Sensitivity"], 3)` and an accuracy of `r round(cfmatrix_hc_diana$overall["Accuracy"], 3)`.**\
+
+The hierarchical models exhibit high accuracy, with Agnes achieving 94.18% and Diana reaching 97.09%. Notably, **the Agnes model boasts a superior sensitivity of 80.95%**, surpassing both K-Means and DBSCAN clustering methodologies sensitivity analysis. This heightened sensitivity in Agnes underscores its efficacy in correctly identifying positive cases, such as cancer, making it a compelling choice for applications prioritizing this aspect of performance.
+
+
+# Multivariate Outlier Detection
+
+# Mahalanobis Distance Based Outlier Analysis
+
+We will start by dedicating a new dataframe for our mahalanobis distance calculation so that our main dataset remains unchanged.
+```{r}
+wbc_maha <- wbc.pca_main
+
+cov_matrix <- cov(wbc_maha)
+m_dist <- mahalanobis(wbc_maha, colMeans(wbc_maha), cov_matrix)
+wbc_maha$m_dist <- round(m_dist,2)
+
+summary(wbc_maha$m_dist)
+```
+
+## Mahalanobis Distance - Setting the Threshold and Outlier Detection
+
+As we see in the above summary, the mahalanobis distance for our dataset ranges from 0.370 to 77.380.\
+
+In outlier detection, we will use Interquartile Range (IQR) as a measure of statistical dispersion that is less sensitive to extreme values compared to alternatives like the standard deviation. To set a threshold for identifying outliers, a common practice is to multiply the IQR by a factor (e.g., 2.5). This approach is conservative, ensuring that only observations significantly deviating from the central tendency of the data are classified as outliers. The multiplier is chosen based on the desired level of sensitivity and is a widely accepted practice in statistical analysis.
+
+```{r}
+# Mahalanobis Outliers - Threshold set to twice the IQR
+threshold_maha <- 2.5*IQR(wbc_maha$m_dist)
+wbc_maha$Outlier_maha <- ifelse(wbc_maha$m_dist > threshold_maha, "Yes", "No")
+
+
+wbc_maha$y <- wbc$y
+# wbc_maha[wbc_maha$Outlier_maha == "Yes",]
+
+wbc_maha_outlier_table <- kable(table(wbc_maha$Outlier_maha), caption = "Table of Mahalanobis Distance Based Outliers Count", col.names = c("", "Count"))
+wbc_maha_outlier_table
+```
+
+
+```{r}
+# Mahalanobis Outliers - Threshold set to twice the IQR
+threshold_maha2 <- 2*IQR(wbc_maha$m_dist)
+wbc_maha$Outlier_maha <- ifelse(wbc_maha$m_dist > threshold_maha2, "Yes", "No")
+
+
+wbc_maha$y <- wbc$y
+# wbc_maha[wbc_maha$Outlier_maha == "Yes",]
+
+wbc_maha_outlier_table2 <- kable(table(wbc_maha$Outlier_maha), caption = "Table of Mahalanobis Distance Based Outliers Count", col.names = c("", "Count"))
+wbc_maha_outlier_table2
+```
+
+Here, we see that the Mahalanobis Distance approach with 2 times the IQR threshold gives us an outlier count of 67 as compared to an outlier count of 48 with 2.5 times the IQR as threshold. Since our main focus is to improve sensitivity of our model, we will move forward with the threshold and outlier detection using 2 times the IQR. 
+
+## Confusion Matrix based on Mahalanobis Distance Outliers
+
+Let's test the sensitivity of our approach.
+
+```{r}
+pred_maha <- ifelse(wbc_maha$Outlier_maha == "Yes", "Cancer", "No Cancer")
+actual_maha <- ifelse(wbc_maha$y == 1, "Cancer", "No Cancer")
+
+cfmatrix_maha <- confusionMatrix(data = factor(pred_maha), reference = factor(actual_maha))
+cfmatrix_maha
+```
+
+We can see in the above analysis that **our model has a sensitivity of `r round(cfmatrix_maha$byClass["Sensitivity"], 3)` and an accuracy of `r round(cfmatrix_maha$overall["Accuracy"], 3)`.**\
+
+The accuracy of the model and outlier analysis based on Mahalanobis distance is commendable at 86.24% and the sensitivity is also noteworthy at 85.71%. This indicates that the model successfully identifies approximately 85.71% of actual cancer cases, making it a more effective choice for detecting high-risk patients compared to the rest of the models.\
+
+
+# Isolation Forest
+
+Isolation Forest is an anomaly detection algorithm that is particularly effective for identifying outliers or anomalies in a dataset. It is based on the idea that anomalies are often rare and can be isolated with fewer splits in a decision tree compared to normal instances.
+
+```{r}
+wbcforest <- wbc.pca_main
+wbcforest$y <- wbc$y
+
+iso <- isolationForest$new(sample_size = 20) #adjusted sample size for our data
+iso$fit(wbcforest)
+wbcforest$Anomaly_Scores <- iso$predict(wbcforest)$anomaly_score
+ggplot(wbcforest) + aes(x=Anomaly_Scores) + geom_density() + theme_minimal()
+```
+
+## Outlier Detection Using Isolation Forest - Anomaly Scores
+Anomaly scores represent how different or unusual a particular data point is. The higher the anomaly score, the higher the probability of the data point being an outlier. We can choose a suitable threshold based on our graph score above. Seems like 0.60 would be a suitable choice for our threshold.
+
+```{r}
+iso_threshold <- 0.60
+wbcforest$Outlier <- as.factor(ifelse(wbcforest$Anomaly_Scores >= iso_threshold, "Outlier", "Normal"))
+# wbcforest[wbcforest$Outlier == "Outlier",]
+
+wbcforest_outlier_table <- kable(table(wbcforest$Outlier), caption = "Table of Isolation Forest Based Outliers Count", col.names = c("", "Count"))
+wbcforest_outlier_table
+
+```
+
+We see above that 18 patients in our wbc dataset were considered as outliers or patients with high-risk by our isolation forest model and the corresponding threshold. Let's visualize these outliers using just PC1 and PC2 as our axes.
+
+```{r}
+ggplot(wbcforest, aes(x = PC1, y = PC2, color = Outlier)) + 
+  geom_point(size = 5, alpha = 0.5) +
+  geom_text(aes(label = row.names(wbcforest)), hjust = 1 , vjust = -1 ,size = 3 ) +
+  theme_minimal()
+```
+
+## Confusion Matrix for the Isolation Forest Model
+
+Let's test the sensitivity of our approach using Isolation Forest Model.
+
+```{r}
+pred_iso <- ifelse(wbcforest$Outlier == "Outlier", "Cancer", "No Cancer")
+actual_iso <- ifelse(wbcforest$y == 1, "Cancer", "No Cancer")
+
+cfmatrix_iso <- confusionMatrix(data = factor(pred_iso), reference = factor(actual_iso))
+cfmatrix_iso
+```
+We can see in the above analysis that **our Isolation Forest Anomaly detection model has a sensitivity of `r round(cfmatrix_iso$byClass["Sensitivity"], 3)` and an accuracy of `r round(cfmatrix_iso$overall["Accuracy"], 3)`.**\
+
+While our Isolation Forest model exhibits high accuracy, its sensitivity is notably low at 0.4762. This implies that the model can only identify approximately 47.62% of high-risk patients who may genuinely have cancer. Consequently, the Isolation Forest approach appears sub-optimal for this dataset, as it falls short in effectively capturing a significant portion of potential cancer cases.\
+Interestingly, we have the same sensitivity rate as our K-means model, suggesting the similarity between these approaches.
+
+# Comparison of Sensitivity and Accuracy Across Different Models
+
+|Model/Approach Name|Total Outlier Count|Sensitivity|Accuracy|
+|:----|:----|:----|:----|
+|K-Means Clustering|12|47.62%|96.56%|
+|Density Based Clustering(DBSCAN)|46|71.43%|90.21%|
+|Agglomerative Hierarchical Clustering|35|80.95%|94.18%|
+|Divisive Hierarchical Clustering|16|61.91%|97.09%|
+|Mahalanobis Distance|67|85.71%|86.24%|
+|Isolation Forest|18|47.62%|94.97%|
+
+## Observations:
+
+- **DBSCAN** demonstrated good sensitivity (71.43%) and overall accuracy (90.21%) in identifying outliers within clusters.
+
+- **Agglomerative Hierarchical Clustering (Agnes)** exhibited the highest sensitivity (80.95%) among clustering methods, but with slightly lower accuracy compared to DBSCAN.
+
+- **Divisive Hierarchical Clustering (Diana)** had high accuracy (97.09%) with decent sensitivity (61.91%).
+
+- **Mahalanobis Distance** based outlier analysis model achieved the highest sensitivity (85.71%) across all models but at the cost of some accuracy (86.24%).
+
+- **Isolation Forest** based outlier analysis and **K-Means** model showed balanced results with low sensitivity (47.62%) and high accuracy (94.97%).
+
+- In general, a higher count of identified outliers tends to correlate with better sensitivity in the model, although exceptions may exist.
+
+# Conclusion, Interpretation, and Recommendations
+
+In our pursuit of advancing cancer detection methodologies, we centered our focus on harnessing the power of unsupervised learning techniques to analyze an extensive array of unknown health indicators. In this analysis and exploration of outlier detection methodologies, we utilized Principal Component Analysis (PCA) with 7 components, capturing 90% of the variances within our **wbc** dataset. We experimented with various techniques, including DBSCAN clustering, Agglomerative Hierarchical Clustering (Agnes), Divisive Hierarchical Clustering (Diana), Mahalanobis Distance, and Isolation Forest.
+
+Iterating through models with varying cluster numbers, thresholds, and distance metrics, we diligently sought the optimal configurations aligning with our analytical objectives. The array of models, from K-Means and DBSCAN clustering to Agglomerative and Divisive Hierarchical Clustering, as well as different multivariate outlier detection methodologies, provided diverse perspectives on our dataset. Each model showcased unique strengths, with Sensitivity emerging as a critical parameter, prioritizing the minimization of False Negatives in cancer detection. Notably, **Mahalanobis Distance based outlier detection and Agglomerative Hierarchial Clustering model stood out with the highest Sensitivity at 85.71% and 80.95%, respectively**, highlighting their prowess in capturing cancer instances.
+
+However, the importance of threshold settings, particularly in outlier detection models such as Mahalanobis Distance and Isolation Forest, cannot be overstated. Fine-tuning these parameters demands precision, as it significantly influences the model's performance. While the confusion matrix and sensitivity offered valuable insights into model evaluation, adopting a more comprehensive set of metrics and exploring ensemble methods could deepen our understanding of each model's effectiveness. The prospect of combining models, each leveraging its unique strengths, holds promise in bolstering the robustness of cancer detection, especially when applied to new and diverse datasets.
+
+Looking ahead, the augmentation of our dataset emerges as a key strategy for fortifying our models. A larger and more diverse dataset has the potential to enhance overall effectiveness and sensitivity, crucial factors in the dynamic realm of cancer diagnosis models. Embracing a multifaceted approach that integrates various unsupervised learning techniques and emphasizes continual model refinement is poised to elevate the precision and reliability of cancer detection systems.

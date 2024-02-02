@@ -13,7 +13,7 @@ output:
 knitr::opts_chunk$set(echo = TRUE)
 knitr::opts_chunk$set(warning = FALSE)
 knitr::opts_chunk$set(message = FALSE)
-setwd ("C:/Users/atush/OneDrive/Desktop/Fall B 2023/MBAN 556/HW2")
+# setwd ("C:/Users/atush/OneDrive/Desktop/Fall B 2023/MBAN 556/HW2")
 ```
 
 # Introduction
